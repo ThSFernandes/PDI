@@ -1,16 +1,15 @@
 import sys
-import requests
-import numpy as np
 import cv2
-from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QFileDialog, QInputDialog, QGridLayout, QLabel
-from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtCore import QTimer, QSize, Qt
+import numpy as np
+from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QFileDialog, QInputDialog, QHBoxLayout, QLabel, QGridLayout
+from PyQt5.QtGui import QImage, QPixmap, QFont
+from PyQt5.QtCore import QTimer, Qt
 
-class VideoApp(QMainWindow):
+class AplicativoDeVideo(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('Video Detection')
-        self.setGeometry(100, 100, 1200, 800)
+        self.setWindowTitle('Detecção de Vídeo')  # Título da janela
+        self.setGeometry(100, 100, 1200, 800)  # Dimensões da janela
         self.video_source = None
         self.capture = None
         self.stream_generator = None
@@ -18,136 +17,135 @@ class VideoApp(QMainWindow):
         self.effect_bg = False
         self.effect_detection = False
 
-        # Initialize Background Subtractor
+        # Carregar o modelo YOLOv4-tiny
+        self.net = cv2.dnn.readNet("yolov4-tiny.weights", "yolov4-tiny.cfg")
+        self.model = cv2.dnn.DetectionModel(self.net)
+        self.model.setInputParams(size=(416, 416), scale=1/255)
+
+        # Carregar as classes COCO
+        self.class_names = []
+        with open("coco.names", "r") as f:
+            self.class_names = [cname.strip() for cname in f.readlines()]
+
+        # Cores para as classes
+        self.CORES = [(0, 255, 255), (255, 255, 0), (0, 255, 0), (255, 0, 0)]
+
+        # Inicializar o Subtrator de Fundo
         self.fgbg = cv2.createBackgroundSubtractorMOG2()
 
-        # Create central widget and main layout
-        self.central_widget = QWidget()
-        self.setCentralWidget(self.central_widget)
-        self.main_layout = QGridLayout()
-        self.central_widget.setLayout(self.main_layout)
+        # Criar o widget central e layout principal
+        self.widget_central = QWidget()
+        self.setCentralWidget(self.widget_central)
+        self.layout_principal = QGridLayout()
+        self.widget_central.setLayout(self.layout_principal)
 
-        # Create sidebar for navigation
-        self.sidebar_widget = QWidget()
-        self.sidebar_layout = QVBoxLayout()
-        self.sidebar_layout.setContentsMargins(10, 10, 10, 10)
-        self.sidebar_layout.setSpacing(10)
-        self.sidebar_widget.setLayout(self.sidebar_layout)
-        self.main_layout.addWidget(self.sidebar_widget, 0, 0, 4, 1)
+        # Criar a barra lateral para navegação
+        self.widget_lateral = QWidget()
+        self.layout_lateral = QVBoxLayout()
+        self.layout_lateral.setContentsMargins(10, 10, 10, 10)
+        self.layout_lateral.setSpacing(10)
+        self.widget_lateral.setLayout(self.layout_lateral)
+        self.layout_principal.addWidget(self.widget_lateral, 0, 0)
 
-        # Create buttons for sidebar
-        self.create_sidebar_buttons()
+        # Criar o rótulo para exibição do vídeo
+        self.rotulo_video = QLabel()
+        self.rotulo_video.setStyleSheet("border: 2px solid #34495e;")  # Estilo da borda atualizado
+        self.layout_principal.addWidget(self.rotulo_video, 0, 1)
 
-        # Create video and effect areas
-        self.video_label = QLabel()
-        self.effect_bg_label = QLabel()
-        self.effect_detection_label = QLabel()
-        self.effect_bg_label.setStyleSheet("border: 1px solid green;")  # Border to differentiate background subtraction area
-        self.effect_detection_label.setStyleSheet("border: 1px solid blue;")  # Border to differentiate object detection area
+        # Criar o rótulo para mostrar as contagens
+        self.rotulo_contagem = QLabel("Adultos: 0 | Crianças: 0 | Animais: 0")
+        fonte = QFont()
+        fonte.setPointSize(14)
+        self.rotulo_contagem.setFont(fonte)
+        self.layout_principal.addWidget(self.rotulo_contagem, 1, 1)
 
-        # Add video and effect labels to the layout
-        self.main_layout.addWidget(self.video_label, 0, 1, 2, 2)
-        self.main_layout.addWidget(self.effect_bg_label, 2, 1)
-        self.main_layout.addWidget(self.effect_detection_label, 2, 2)
+        # Inicializar o temporizador para atualização do vídeo
+        self.temporizador = QTimer()
+        self.temporizador.timeout.connect(self.atualizar_frame)
+        self.temporizador.start(30)
 
-        # Initialize timer for video update
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_frame)
-        self.timer.start(30)
+        # Criar os botões da barra lateral com ícones
+        self.criar_botoes_barra_lateral()
 
-    def create_sidebar_buttons(self):
-        # Phone Camera Button
-        self.phone_btn = QPushButton('Phone Camera')
-        self.phone_btn.clicked.connect(self.connect_phone)
-        self.phone_btn.setStyleSheet("background-color: #3498db; color: white; border: none; padding: 10px; border-radius: 5px;")
-        self.sidebar_layout.addWidget(self.phone_btn)
-
-        # Webcam Button
-        self.webcam_btn = QPushButton('Webcam')
-        self.webcam_btn.clicked.connect(self.connect_webcam)
-        self.webcam_btn.setStyleSheet("background-color: #3498db; color: white; border: none; padding: 10px; border-radius: 5px;")
-        self.sidebar_layout.addWidget(self.webcam_btn)
-
-        # Video File Button
-        self.video_btn = QPushButton('Video File')
-        self.video_btn.clicked.connect(self.load_video)
-        self.video_btn.setStyleSheet("background-color: #3498db; color: white; border: none; padding: 10px; border-radius: 5px;")
-        self.sidebar_layout.addWidget(self.video_btn)
-
-        # Effect Buttons
-        self.bg_sub_btn = QPushButton('Background Subtraction')
-        self.bg_sub_btn.clicked.connect(self.toggle_bg_subtraction)
-        self.bg_sub_btn.setStyleSheet("background-color: #2ecc71; color: white; border: none; padding: 10px; border-radius: 5px;")
-        self.sidebar_layout.addWidget(self.bg_sub_btn)
+    def criar_botoes_barra_lateral(self):
+        estilo_botao = "background-color: #3498db; color: white; border: none; padding: 10px; border-radius: 5px;"
+        estilo_efeito = "background-color: #2ecc71; color: white; border: none; padding: 10px; border-radius: 5px;"
         
-        self.obj_det_btn = QPushButton('Object Detection')
-        self.obj_det_btn.clicked.connect(self.toggle_object_detection)
-        self.obj_det_btn.setStyleSheet("background-color: #e67e22; color: white; border: none; padding: 10px; border-radius: 5px;")
-        self.sidebar_layout.addWidget(self.obj_det_btn)
+        # Botão da Câmera do Telefone
+        self.botao_telefone = QPushButton('Câmera do Telefone')
+        self.botao_telefone.setStyleSheet(estilo_botao)
+        self.botao_telefone.clicked.connect(self.conectar_telefone)
+        self.layout_lateral.addWidget(self.botao_telefone)
+
+        # Botão da Webcam
+        self.botao_webcam = QPushButton('Webcam')
+        self.botao_webcam.setStyleSheet(estilo_botao)
+        self.botao_webcam.clicked.connect(self.conectar_webcam)
+        self.layout_lateral.addWidget(self.botao_webcam)
+
+        # Botão do Arquivo de Vídeo
+        self.botao_video = QPushButton('Arquivo de Vídeo')
+        self.botao_video.setStyleSheet(estilo_botao)
+        self.botao_video.clicked.connect(self.carregar_video)
+        self.layout_lateral.addWidget(self.botao_video)
+
+        # Botões de Efeito
+        self.botao_sub_bg = QPushButton('Subtração de Fundo')
+        self.botao_sub_bg.setStyleSheet(estilo_efeito)
+        self.botao_sub_bg.clicked.connect(self.alternar_subtracao_fundo)
+        self.layout_lateral.addWidget(self.botao_sub_bg)
         
-        self.stop_btn = QPushButton('Stop')
-        self.stop_btn.clicked.connect(self.stop_video)
-        self.stop_btn.setStyleSheet("background-color: #e74c3c; color: white; border: none; padding: 10px; border-radius: 5px;")
-        self.sidebar_layout.addWidget(self.stop_btn)
+        self.botao_det_obj = QPushButton('Detecção de Objetos')
+        self.botao_det_obj.setStyleSheet("background-color: #e67e22; color: white; border: none; padding: 10px; border-radius: 5px;")
+        self.botao_det_obj.clicked.connect(self.alternar_deteccao_objetos)
+        self.layout_lateral.addWidget(self.botao_det_obj)
+        
+        self.botao_parar = QPushButton('Parar')
+        self.botao_parar.setStyleSheet("background-color: #e74c3c; color: white; border: none; padding: 10px; border-radius: 5px;")
+        self.botao_parar.clicked.connect(self.parar_video)
+        self.layout_lateral.addWidget(self.botao_parar)
 
-        # Set sidebar properties
-        self.sidebar_widget.setFixedWidth(200)
-        self.sidebar_widget.setStyleSheet("background-color: #2c3e50;")
+        # Configurar propriedades da barra lateral
+        self.widget_lateral.setFixedWidth(200)
+        self.widget_lateral.setStyleSheet("background-color: #2c3e50;")
 
-    def connect_phone(self):
-        url, ok = QInputDialog.getText(self, 'Phone Camera URL', 'Enter the URL of the DroidCam:')
+    def conectar_telefone(self):
+        url, ok = QInputDialog.getText(self, 'URL da Câmera do Telefone', 'Digite o URL do DroidCam:')
         if ok and url:
             self.video_source = url
             self.capture = None
-            self.stream_generator = self.get_stream(url)
-            self.effect_bg_label.clear()
-            self.effect_detection_label.clear()
+            self.stream_generator = self.obter_stream(url)
         else:
-            print("Please enter a valid URL.")
+            print("Por favor, insira um URL válido.")
 
-    def connect_webcam(self):
-        self.video_source = 0  # Default webcam
+    def conectar_webcam(self):
+        self.video_source = 0  # Webcam padrão
         self.capture = cv2.VideoCapture(self.video_source)
         self.stream_generator = None
-        self.effect_bg_label.clear()
-        self.effect_detection_label.clear()
 
-    def load_video(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, 'Select Video File', '', 'Video Files (*.mp4 *.avi)')
-        if file_path:
-            self.video_source = file_path
+    def carregar_video(self):
+        caminho_arquivo, _ = QFileDialog.getOpenFileName(self, 'Selecionar Arquivo de Vídeo', '', 'Arquivos de Vídeo (*.mp4 *.avi)')
+        if caminho_arquivo:
+            self.video_source = caminho_arquivo
             self.capture = cv2.VideoCapture(self.video_source)
             self.stream_generator = None
-            self.effect_bg_label.clear()
-            self.effect_detection_label.clear()
 
-    def toggle_bg_subtraction(self):
+    def alternar_subtracao_fundo(self):
         self.effect_bg = not self.effect_bg
-        if not self.effect_bg and not self.effect_detection:
-            self.show_effect = False
-            self.effect_bg_label.clear()
-        else:
-            self.show_effect = True
-            self.effect_bg_label.setText('Background Subtraction Effect')
-        
-    def toggle_object_detection(self):
-        self.effect_detection = not self.effect_detection
-        if not self.effect_detection and not self.effect_bg:
-            self.show_effect = False
-            self.effect_detection_label.clear()
-        else:
-            self.show_effect = True
-            self.effect_detection_label.setText('Object Detection Effect')
+        self.show_effect = self.effect_bg or self.effect_detection
 
-    def stop_video(self):
+    def alternar_deteccao_objetos(self):
+        self.effect_detection = not self.effect_detection
+        self.show_effect = self.effect_detection or self.effect_bg
+
+    def parar_video(self):
         if self.capture:
             self.capture.release()
-        self.video_label.clear()
+        self.rotulo_video.clear()
         self.stream_generator = None
-        self.effect_bg_label.clear()
-        self.effect_detection_label.clear()
 
-    def get_stream(self, url):
+    def obter_stream(self, url):
+        import requests
         def stream():
             stream = requests.get(url, stream=True, timeout=10)
             bytes_data = b''
@@ -165,62 +163,71 @@ class VideoApp(QMainWindow):
                             yield img
         return stream()
 
-    def apply_background_subtraction_effect(self, frame):
+    def aplicar_efeito_subtracao_fundo(self, frame):
         fgmask = self.fgbg.apply(frame)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         fgmask = cv2.morphologyEx(fgmask, cv2.MORPH_CLOSE, kernel)
         fgmask = cv2.morphologyEx(fgmask, cv2.MORPH_OPEN, kernel)
         return fgmask
 
-    def apply_object_detection_effect(self, frame):
-        fgmask = self.apply_background_subtraction_effect(frame)
-        contours, _ = cv2.findContours(fgmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for contour in contours:
-            if cv2.contourArea(contour) > 500:  # Ajuste o valor conforme necessário
-                x, y, w, h = cv2.boundingRect(contour)
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+    def aplicar_efeito_deteccao_objetos(self, frame):
+        classes, scores, boxes = self.model.detect(frame, 0.1, 0.2)
+        adultos, criancas, animais = 0, 0, 0
+
+        for (classid, score, box) in zip(classes, scores, boxes):
+            cor = self.CORES[int(classid) % len(self.CORES)]
+            rotulo = f"{self.class_names[classid]} : {score:.2f}"
+            cv2.rectangle(frame, box, cor, 2)
+            cv2.putText(frame, rotulo, (box[0], box[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, cor, 2)
+
+            # Incrementar contagem com base na classe
+            if self.class_names[classid] in ["person"]:  # Assumindo que 'person' representa adultos
+                adultos += 1
+            elif self.class_names[classid] in ["cat", "dog"]:  # Assumindo que 'cat' e 'dog' representam animais
+                animais += 1
+            # Estender conforme necessário para crianças se as classes estiverem disponíveis
+
+        # Atualizar o rótulo de contagem
+        self.rotulo_contagem.setText(f"Adultos: {adultos} | Crianças: 0 | Animais: {animais}")
         return frame
 
-
-    def update_frame(self):
+    def atualizar_frame(self):
         if self.stream_generator:
-            try:
-                frame = next(self.stream_generator, None)
-                if frame is None:
-                    return
-            except StopIteration:
-                self.stream_generator = None
-                return
-        elif self.capture:
+            frame = next(self.stream_generator)
+        elif self.capture and self.capture.isOpened():
             ret, frame = self.capture.read()
             if not ret:
                 return
         else:
             return
 
-        # Convert BGR to RGB
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        qimg_frame = QImage(frame_rgb.data, frame_rgb.shape[1], frame_rgb.shape[0], QImage.Format_RGB888)
-        pixmap_frame = QPixmap.fromImage(qimg_frame)
-        self.video_label.setPixmap(pixmap_frame)
+        if frame is not None:
+            # Redimensionar o frame para se ajustar ao espaço disponível
+            h, w = frame.shape[:2]
+            novo_w, novo_h = 800, int(h * 800 / w)
+            frame = cv2.resize(frame, (novo_w, novo_h))
+            
+            # Converter o frame para o formato RGB para exibição
+            imagem_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = imagem_rgb.shape
+            bytes_por_linha = ch * w
+            qimg = QImage(imagem_rgb.data, w, h, bytes_por_linha, QImage.Format_RGB888)
+            self.rotulo_video.setPixmap(QPixmap.fromImage(qimg))
 
-        if self.show_effect:
-            if self.effect_bg:
-                fgmask = self.apply_background_subtraction_effect(frame)
-                fgmask_rgb = cv2.cvtColor(fgmask, cv2.COLOR_GRAY2RGB)
-                qimg_fgmask = QImage(fgmask_rgb.data, fgmask_rgb.shape[1], fgmask_rgb.shape[0], QImage.Format_RGB888)
-                pixmap_fgmask = QPixmap.fromImage(qimg_fgmask)
-                self.effect_bg_label.setPixmap(pixmap_fgmask)
+            if self.show_effect:
+                if self.effect_bg:
+                    fgmask = self.aplicar_efeito_subtracao_fundo(frame)
+                    imagem_bg = QImage(fgmask.data, fgmask.shape[1], fgmask.shape[0], fgmask.strides[0], QImage.Format_Grayscale8)
+                    self.rotulo_video.setPixmap(QPixmap.fromImage(imagem_bg))
 
-            if self.effect_detection:
-                detected_frame = self.apply_object_detection_effect(frame)
-                detected_frame_rgb = cv2.cvtColor(detected_frame, cv2.COLOR_BGR2RGB)
-                qimg_detected = QImage(detected_frame_rgb.data, detected_frame_rgb.shape[1], detected_frame_rgb.shape[0], QImage.Format_RGB888)
-                pixmap_detected = QPixmap.fromImage(qimg_detected)
-                self.effect_detection_label.setPixmap(pixmap_detected)
+                if self.effect_detection:
+                    frame_deteccao = self.aplicar_efeito_deteccao_objetos(frame)
+                    imagem_rgb_deteccao = cv2.cvtColor(frame_deteccao, cv2.COLOR_BGR2RGB)
+                    qimg_deteccao = QImage(imagem_rgb_deteccao.data, imagem_rgb_deteccao.shape[1], imagem_rgb_deteccao.shape[0], imagem_rgb_deteccao.strides[0], QImage.Format_RGB888)
+                    self.rotulo_video.setPixmap(QPixmap.fromImage(qimg_deteccao))
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    window = VideoApp()
-    window.show()
+    janela = AplicativoDeVideo()
+    janela.show()
     sys.exit(app.exec_())
