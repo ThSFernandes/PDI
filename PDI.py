@@ -173,16 +173,14 @@ class VideoApp(QMainWindow):
         return fgmask
 
     def apply_object_detection_effect(self, frame):
-        fgmask = self.fgbg.apply(frame)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        fgmask = cv2.morphologyEx(fgmask, cv2.MORPH_CLOSE, kernel)
-        fgmask = cv2.morphologyEx(fgmask, cv2.MORPH_OPEN, kernel)
+        fgmask = self.apply_background_subtraction_effect(frame)
         contours, _ = cv2.findContours(fgmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for contour in contours:
-            if cv2.contourArea(contour) > 500:
+            if cv2.contourArea(contour) > 500:  # Ajuste o valor conforme necessário
                 x, y, w, h = cv2.boundingRect(contour)
                 cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
         return frame
+
 
     def update_frame(self):
         if self.stream_generator:
